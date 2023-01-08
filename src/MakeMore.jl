@@ -105,9 +105,29 @@ d = Multinomial(1, p)
 custom_sample() = itos[rand(rng, d) |> argmax]
 samples = [custom_sample() for i in 1:1000]
 
+# rowwise operation julia
+using LinearAlgebra
+
+P = mapslices(x -> x ./ sum(x), bigram_counts3, dims = 2)
+
+row_sums = sum(bigram_counts3, dims = 2)
+#row_sums_expanded = row_sums .* ones(1, 28)
+# doing repeat manually
+row_sums_expanded = repeat(row_sums, 1, 28)
+P2 = bigram_counts3 ./ row_sums_expanded
+P3 = (bigram_counts3 .+ 1) ./ row_sums # in broadcasting the smaller dimension is repeated no extra memory is allocated unlike in repeat. unlike python the broadcasting is explicit
+# rowwise operation via repeat
+P4 = bigram_counts3 ./ row_sums' # transpose gives wrong result
+
+
+bigram_counts3[stoi["<S>"], :]
+replace_nan(x) = isnan(x) ? 0 : x
+
+replace_nan.(P2) ≈ replace_nan.(P)
 
 function sample_next_char(char)
-    p = bigram_counts3[stoi[char], :] ./ sum(bigram_counts3[stoi[char], :])
+    # p = bigram_counts3[stoi[char], :] ./ sum(bigram_counts3[stoi[char], :])
+    p = P[stoi[char], :]
     d = Multinomial(1, p)
     return itos[rand(rng, d) |> argmax]
 end
@@ -126,6 +146,19 @@ function sample_word()
 end
 
 hundered_words = [sample_word() for i in 1:100]
+
+function negative_log_likelihood(word)
+    word_bigrams = bigrams(wrap_seq(word))
+    log_likelihood = 0.0
+    for bigram in word_bigrams
+        log_likelihood += log(P3[stoi[bigram[1]] , stoi[bigram[2]]])
+    end
+    return -log_likelihood/length(word_bigrams)
+end
+
+negative_log_likelihood("andrej")
+
+log_likelihood_dataset = negative_log_likelihood.(words) |> mean
 
 
 # above can also be done by using samples with weights
