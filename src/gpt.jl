@@ -1,13 +1,29 @@
 module GPT
 
 using Flux
+using Flux.Optimise
 using Flux.Losses: logitcrossentropy
 using Flux: onehotbatch
 
+using StatsBase
+using MLUtils
+using Random
+using Fire
+
+using ProgressMeter
+using BSON: @save
+
+
+# Non-CLI arguments
+Random.seed!(1337)
+device = gpu
+
+# Data
 
 text = read("input.txt", String)
 chars = Set(text) |> collect |> sort
 
+#higher order function here would be good I think
 stoi = Dict(c => i for (i, c) in enumerate(chars))
 itos = Dict(i => c for (i, c) in enumerate(chars))
 encode(text) = [stoi[c] for c in text]
@@ -16,53 +32,19 @@ decode(code) = [itos[i] for i in code] |> join
 
 data = encode(text)
 
-device = gpu
-
-using BenchmarkTools
-
-# @btime encode(text)
-# @btime encode_char.(text |> collect) # note that strings are not broadcastable because treated as scalars
-
-using MLUtils
-
-
-using Random
-# Random.seed!(1337)
-
-
-
-function train_examples(chunk)
-end    
-    
-    
-    
-
-
 function get_batch(data, batch_size, block_size)
     start_offsets = rand(1:length(data)-block_size, batch_size)
     xs = hcat([data[start:start+block_size-1] for start in start_offsets]...)
     ys = hcat([data[start+1:start+block_size] for start in start_offsets]...)
-    # chunks = hcat([data[ix:ix+block_size] for ix in start_offsets]...)
     ys = onehotbatch(ys, 1:length(chars))
     return xs |> device, ys |> device
 end
 
+# Model
 
-# xb, yb = get_batch(train_data, batch_size, block_size)
+BigramModel(vocab_size) = Flux.Embedding(vocab_size, vocab_size)
 
-# model(xb)
-
-# yb_oh = onehotbatch(yb, 1:length(chars))
-# logitcrossentropy(model(xb), yb_oh)
-
-
-function loss(model, xs, ys_oh)
-    return logitcrossentropy(model(xs), ys_oh)
-end
-
-
-
-using StatsBase
+loss(model, xs, ys_oh) = logitcrossentropy(model(xs), ys_oh)
 
 
 function generate(model, start_tokens, max_len)
@@ -80,10 +62,7 @@ function generate(model, start_tokens, max_len)
     return tokens
 end
 
-
-using Flux.Optimise
-
-
+# Training
 
 function train_step!(model, xs, ys, opt_state)
     l, gs = Flux.withgradient(m -> loss(m, xs, ys), model)
@@ -91,13 +70,8 @@ function train_step!(model, xs, ys, opt_state)
     return model, opt_state, l
 end
 
-
-
-using ProgressMeter
-
 function train(model, train_data, valid_data, opt_state, epochs, block_size, batch_size)
-
-
+    
     function estimate_loss()
         # we don't need to worry about modes here becaue we are not calculating gradients
         # when we calculate gradients flux will automatically switch to train mode
@@ -113,10 +87,8 @@ function train(model, train_data, valid_data, opt_state, epochs, block_size, bat
         return valid_loss |> cpu, train_loss |> cpu
     end
 
-    
     for epoch in 1:epochs
-        l = 0
-        @showprogress for i in 1:100
+        @showprogress for i in 1:10000
             xs, ys = get_batch(train_data, batch_size, block_size)
             model, opt_state, l = train_step!(model, xs, ys, opt_state)
         end
@@ -128,17 +100,11 @@ function train(model, train_data, valid_data, opt_state, epochs, block_size, bat
 end
 
 
-
-
-
-using Fire
-using BSON: @save
-
 "Train a Bigram Language Model"
-@main function main(filename::AbstractString, epochs::Integer=10,
+@main function main(filename::AbstractString; epochs::Integer=10,
                     block_size::Integer=8, batch_size::Integer=4)
 
-
+    println("Done loading data")
     train_data, valid_data = splitobs(data, at = 0.9)
 
     model = Flux.Embedding(length(chars), length(chars)) |> device
@@ -150,13 +116,11 @@ using BSON: @save
     start_tokens = ones(Int, 1, 1) |> device
     generate(model, start_tokens, 1000) |> cpu |> decode |> println
 
-    
     model = model |> cpu
 
     println("Saving model to $filename")
     @save filename model
     println("Done!")
-    
 end   
 
 end
