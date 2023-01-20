@@ -1,5 +1,6 @@
 module MakeMore
 
+include("transformer.jl")
 include("gpt.jl")
 # include("bugrep.jl")
 #include("bigram.jl")
