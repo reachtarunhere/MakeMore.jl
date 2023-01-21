@@ -44,6 +44,15 @@ end
 
 BigramModel(vocab_size) = Flux.Embedding(vocab_size, vocab_size)
 
+function FancyBigramModel(vocab_size, block_size, hidden_size)
+    embed = Flux.Embedding(vocab_size, hidden_size)
+    pos_embed = Chain(x -> 1:block_size, Flux.Embedding(block_size, hidden_size))
+    lm_head = Flux.Dense(hidden_size, vocab_size)
+    return Chain(Parallel(.+, embed, pos_embed), lm_head)
+end
+    
+
+
 loss(model, xs, ys_oh) = logitcrossentropy(model(xs), ys_oh)
 
 
