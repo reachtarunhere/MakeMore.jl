@@ -1,6 +1,8 @@
 module MakeMore
 
-include("transformer.jl")
+include("train.jl")
+include("model.jl")
+# include("transformer.jl")
 include("gpt.jl")
 # include("bugrep.jl")
 #include("bigram.jl")

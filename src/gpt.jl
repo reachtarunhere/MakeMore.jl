@@ -3,7 +3,7 @@ module GPT
 using Flux
 using Flux.Optimise
 using Flux.Losses: logitcrossentropy
-using Flux: onehotbatch
+using Flux: onehotbatch, @functor
 
 using StatsBase
 using MLUtils
