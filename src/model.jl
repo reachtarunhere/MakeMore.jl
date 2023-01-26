@@ -77,8 +77,8 @@ end
 
 
 function (mha::MHSelfAttention)(x)
-    qkv = mha.MH_QKV(x) # 3 * head_size * n_head, T, BS
-    q, k, v = split_fused_heads(qkv, mha.n_head, mha.head_size)
+    # qkv = mha.MH_QKV(x) # 3 * head_size * n_head, T, BS
+    q, k, v = split_fused_heads(mha.MH_QKV(x), mha.n_head, mha.head_size)
     A = dot_attention(q, k, v, mha.mask) |> mha.attention_dropout # T, T, n_head, BS
     o = v ⊠ A # head_size, T, n_head, BS
     # now fuse heads
@@ -108,12 +108,18 @@ function Decoder(;vocab_size, n_layers, n_embed, n_head, block_size, attention_d
     blocks = [Block(n_embed=n_embed, n_head=n_head, block_size=block_size, attention_dropout=attention_dropout,
                     residual_dropout=residual_dropout, decoder_mask=decoder_mask) for _ in 1:n_layers]
     lm_head = Dense(embed[1].weight') # n_embed, vocab_size (weight tying)
-    return Chain(embed, blocks..., lm_head)
+    return Chain(embed, blocks..., LayerNorm(n_embed), lm_head)
 end
 
 
 m = Decoder(vocab_size=100, n_layers=2, n_embed=512, n_head=8, block_size=512, attention_dropout=0.1, residual_dropout=0.1)
 xs = rand(1:100, 512, 2)
 m(xs)
+
+# TODO: implement model cropping
+# TODO: implement data parallelism
+# TODO: implement more optimizer details
+# TODO: implement more sampling methods
+# TODO: count total number of params
 
 end # module

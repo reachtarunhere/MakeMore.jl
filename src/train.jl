@@ -65,7 +65,7 @@ function generate(model, start_tokens, max_len, block_size=512)
     sample_helper(p) = sample(1:length(chars), Weights(p))
     tokens = start_tokens
     for i in 1:max_len
-        logits = model(tokens[end-9:end, :] |> device) # this device thing can also be moved inside custom model itself?
+        logits = model(tokens[end-(block_size-1):end, :] |> device) # this device thing can also be moved inside custom model itself?
         last_time_step = logits[:, end, :]
         probs = softmax(last_time_step)
         probs = probs |> cpu
@@ -131,9 +131,9 @@ end
 "Train a Bigram Language Model"
 @main function main(filename::AbstractString; epochs::Integer=10,
                     block_size::Integer=10, batch_size::Integer=32,
-                    n_layers::Integer=1, n_embed::Integer=32,
+                    n_layers::Integer=3, n_embed::Integer=32,
                     train_iters::Integer=500, valid_iters::Integer=100,
-                    lr::Float64=0.001)
+                    lr::Float64=0.001, n_head::Integer=4)
 
     println("Loading data...")
     data, chars, encode, decode = prepare_data()
@@ -142,8 +142,8 @@ end
     
 
     println("Preparing model")
-    model = Model.Decoder(vocab_size=length(chars), n_layers=n_layers, n_embed=n_embed, n_head=8,
-                    block_size=block_size, attention_dropout=0.1, residual_dropout=0.1, decoder_mask=true) |> device
+    model = Model.Decoder(vocab_size=length(chars), n_layers=n_layers, n_embed=n_embed, n_head=n_head,
+                    block_size=block_size, attention_dropout=0.2, residual_dropout=0.2, decoder_mask=true) |> device
 
     # model = Flux.Embedding(length(chars), length(chars)) |> device
     opt = AdamW(lr)
