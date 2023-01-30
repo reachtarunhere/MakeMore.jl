@@ -16,6 +16,19 @@ using Fire
 using ProgressMeter
 using BSON: @save
 
+using BFloat16s
+
+using CUDA
+
+
+mutable struct ScaleValue{T} <: Flux.Optimise.AbstractOptimiser
+    ratio::T
+end
+
+apply!(o::ScaleValue, x, Δ) = Δ .* o.ratio
+
+using BenchmarkTools
+
 
 
 # Non-CLI arguments
@@ -72,7 +85,7 @@ function generate(model, start_tokens, max_len, block_size=512)
         next_token = sample_helper.(eachcol(probs)) # sampling does not work on gpu
         tokens = cat(tokens, next_token', dims=1)
     end
-    return tokens
+    return tokens[block_size:end]
 end
 
 
@@ -86,8 +99,16 @@ end
 
     
 function train_step!(model, xs, ys, opt_state)
+    # println("forward pass")
+    # @time model(xs)
+    # println("loss")
+    # @time l = loss(model, xs, ys)
+    # println("loss direct")
+    # @time logitcrossentropy(model(xs), ys)
+    # println("backward pass")
+    # @time Flux.withgradient(m -> loss(m, xs, ys), model)
     l, gs = Flux.withgradient(m -> loss(m, xs, ys), model)
-    opt_state, model = Flux.update!(opt_state, model, gs[1])
+    opt_state, model = Flux.update!(opt_state, model, gs[1]) # can consider scaling the gradient here
     return model, opt_state, l
 end
 
@@ -111,11 +132,40 @@ function train(model, train_data, valid_data, opt_state, epochs, block_size, bat
         
     end
 
+    # my_xs, my_ys = get_batch(train_data, batch_size, block_size)
+
+    make_dataset() = [get_batch(train_data, batch_size, block_size) for i in 1:train_iters]
+
+
     for epoch in 1:epochs
-        @showprogress for i in 1:train_iters
+        # @showprogress for i in 1:train_iters
+        # dataset = make_dataset()
+
+        # Doing so that julia compliles the code first and we can compare the report
+        # xs, ys = get_batch(train_data, batch_size, block_size)
+        # # xs, ys = my_xs, my_ys
+        # # t = @async get_batch(train_data, batch_size, block_size)
+        # model, opt_state, l = train_step!(model, xs, ys, opt_state)
+
+        
+        
+        progress = Progress(train_iters, showspeed=true)
+#            @showprogress for i in 1:train_iters
+        for i in 1:train_iters
+            # xs, ys = fetch(t)
             xs, ys = get_batch(train_data, batch_size, block_size)
+            # xs, ys = my_xs, my_ys
+            # t = @async get_batch(train_data, batch_size, block_size)
+            
+            # @benchmark begin
+            # @time train_step!(model, xs, ys, opt_state)
             model, opt_state, l = train_step!(model, xs, ys, opt_state)
+            # end
+            next!(progress)
+                # println("loss: ", l)
         end
+
+        
 
         valid_loss, train_loss = estimate_loss()
         println("Epoch: $epoch, Train Loss: $train_loss, Valid Loss: $valid_loss")
@@ -143,12 +193,16 @@ end
 
     println("Preparing model")
     model = Model.Decoder(vocab_size=length(chars), n_layers=n_layers, n_embed=n_embed, n_head=n_head,
-                    block_size=block_size, attention_dropout=0.2, residual_dropout=0.2, decoder_mask=true) |> device
-
-    # model = Flux.Embedding(length(chars), length(chars)) |> device
-    opt = AdamW(lr)
+                          block_size=block_size, attention_dropout=0.2, residual_dropout=0.2, decoder_mask=true)
+    # model = Flux.paramtype(BFloat16, model) |> device
+    model = model |> device
+    println("Setting up optimizer")
+    # model = Flux.Embedding(length(chars), length(chars)) |> device # 
+    # Consider adding scaling for mix precison
+    # opt = Optimiser(AdamW(BFloat16(lr)))
+    opt = Optimiser(AdamW(Float32(lr)))
     opt_state = Flux.setup(opt, model)
-
+    println("Done setting up optimizer")
 
     train_data, valid_data = splitobs(data, at = 0.9)
     model, opt_state = train(model, train_data, valid_data, opt_state, epochs,

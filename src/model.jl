@@ -9,13 +9,15 @@ using LinearAlgebra: tril
 
 using CUDA
 
+using BFloat16s
+
 CUDA.allowscalar(false)
 
 to_batched_matrix(A) = reshape(A, size(A)[1:2]..., :), size(A)[3:end]
 restore_batched_matrix(A, dims) = reshape(A, size(A)[1:2]..., dims...)
 
 
-function Flux.batched_mul(A::AbstractArray, B::AbstractArray)
+function Flux.batched_mul(A::AbstractArray, B::AbstractArray) # check allocations here and see if we can do better
     A, dims = to_batched_matrix(A)
     B, dims = to_batched_matrix(B)
     C = batched_mul(A, B)
@@ -37,8 +39,10 @@ make_from_config(constructor) = config -> constructor(config[get_fn_name(constru
 
 function dot_attention(q, k, v, mask)
     A = (batched_transpose(k) ⊠ q) .+ mask
-    A = softmax(A / √size(k, 1), dims=1)
-    return A
+    # A = softmax(A / √size(k, 1), dims=1) # fix nan issue for fp 16
+    # return A
+    # try reducing allocation by direct return
+    return softmax(A / √Float32(size(k, 1)), dims=1) # fix nan issue for fp 16
 end
 
 
@@ -57,7 +61,8 @@ end
 
 Flux.trainable(m::MHSelfAttention) = (m.MH_QKV, m.MH_O)
 
-make_decoder_mask(block_size) = tril(fill(-1f9, block_size, block_size), -1)
+# make_decoder_mask(block_size) = tril(fill(BFloat16(-1f8), block_size, block_size), -1)
+make_decoder_mask(block_size) = tril(fill(Float32(-1f8), block_size, block_size), -1)
 
 function MHSelfAttention(;n_embed, n_head, block_size, attention_dropout, residual_dropout, decoder_mask=false)
     head_size = n_embed ÷ n_head
@@ -69,7 +74,7 @@ end
 
 function split_fused_heads(x, n_head, head_size, n_fused=3) # seperate heads and qkv
     x = reshape(x, head_size, n_fused, n_head, size(x)[2:end]...)
-    x = permutedims(x, (1, 2, 4, 3, 5))
+    x = permutedims(x, (1, 2, 4, 3, 5)) # wonder if julia fused these two?
     return x[:, 1, :, :, :], x[:, 2, :, :, :], x[:, 3, :, :, :] # bad as it makes a copy
     # should note ultra terrible since we allocate even after a dense op
 end
@@ -100,7 +105,7 @@ end
 function PositionalAwareEmbedding(vocab_size, embed_size, block_size)
     embed = Flux.Embedding(vocab_size, embed_size)
     pos_embed = Chain(x -> 1:block_size, Flux.Embedding(block_size, embed_size))
-    return Parallel(.+, embed, pos_embed)
+    return Parallel(.+, embed, pos_embed) # change to remove dot
 end
 
 function Decoder(;vocab_size, n_layers, n_embed, n_head, block_size, attention_dropout, residual_dropout, decoder_mask=true)
@@ -122,4 +127,4 @@ m(xs)
 # TODO: implement more sampling methods
 # TODO: count total number of params
 
-end # module
+end# module
