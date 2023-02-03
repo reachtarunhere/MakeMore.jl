@@ -3,6 +3,7 @@ module Train
 
 include("model.jl")
 
+
 using Flux
 using Flux.Optimise
 using Flux.Losses: logitcrossentropy
@@ -20,6 +21,7 @@ using BFloat16s
 
 using CUDA
 
+using Lazy
 
 mutable struct ScaleValue{T} <: Flux.Optimise.AbstractOptimiser
     ratio::T
@@ -29,6 +31,23 @@ apply!(o::ScaleValue, x, Δ) = Δ .* o.ratio
 
 using BenchmarkTools
 
+
+struct Packed
+    features
+    mask
+end
+
+
+# Base.:+(a::Packed, b::Packed) = Packed(a.features + b.features, a.mask)
+# Broadcast.broadcastable(f, x::Packed, y::Packed) = Packed(f.(x.features, y.features), x.mask)
+
+# (mha::Model.MHSelfAttention)(x::Packed) = Packed(mha(x.features, x.mask), x.mask)
+# (m::Dense)(x::Packed) = Packed(m(x.features), x.mask)
+# (m::LayerNorm)(x::Packed) = Packed(m(x.features), x.mask)
+# (m::Dropout)(x::Packed) = Packed(m(x.features), x.mask)
+# (m::Embedding)(x::Packed) = Packed(m(x.features), x.mask)
+
+# Base.length(x::Packed) = length(x.features)
 
 
 # Non-CLI arguments
@@ -89,12 +108,14 @@ function generate(model, start_tokens, max_len, block_size=512)
 end
 
 
-function get_batch(data, batch_size, block_size)
+
+function get_batch(data, batch_size, block_size, mask)
     start_offsets = rand(1:length(data)-block_size, batch_size)
     xs = hcat([data[start:start+block_size-1] for start in start_offsets]...)
     ys = hcat([data[start+1:start+block_size] for start in start_offsets]...)
     ys = onehotbatch(ys, 1:length(chars))
-    return xs |> device, ys |> device
+    xs, ys = xs |> device, ys |> device
+    return (xs, mask), ys
 end
 
     
@@ -113,6 +134,8 @@ function train_step!(model, xs, ys, opt_state)
 end
 
 function train(model, train_data, valid_data, opt_state, epochs, block_size, batch_size; train_iters=500, valid_iters=100)
+
+    mask = Model.make_decoder_mask(block_size) |> device
     
     function estimate_loss()
         # we don't need to worry about modes here becaue we are not calculating gradients
@@ -120,11 +143,11 @@ function train(model, train_data, valid_data, opt_state, epochs, block_size, bat
         valid_loss = 0
         train_loss = 0
         for i in 1:valid_iters
-            xs, ys = get_batch(valid_data, batch_size, block_size)
+            xs, ys = get_batch(valid_data, batch_size, block_size, mask)
             # outs = model(xs)
             # logitcrossentropy(outs, ys)
             valid_loss += loss(model, xs, ys)
-            xs, ys = get_batch(train_data, batch_size, block_size)
+            xs, ys = get_batch(train_data, batch_size, block_size, mask)
             train_loss += loss(model, xs, ys)
         end
         valid_loss, train_loss = valid_loss/100, train_loss/100
@@ -134,9 +157,9 @@ function train(model, train_data, valid_data, opt_state, epochs, block_size, bat
 
     # my_xs, my_ys = get_batch(train_data, batch_size, block_size)
 
-    make_dataset() = [get_batch(train_data, batch_size, block_size) for i in 1:train_iters]
+    # make_dataset() = [get_batch(train_data, batch_size, block_size) for i in 1:train_iters]
 
-
+    
     for epoch in 1:epochs
         # @showprogress for i in 1:train_iters
         # dataset = make_dataset()
@@ -150,16 +173,18 @@ function train(model, train_data, valid_data, opt_state, epochs, block_size, bat
         
         
         progress = Progress(train_iters, showspeed=true)
-#            @showprogress for i in 1:train_iters
+        #            @showprogress for i in 1:train_iters
+
         for i in 1:train_iters
             # xs, ys = fetch(t)
-            xs, ys = get_batch(train_data, batch_size, block_size)
+            xs, ys = get_batch(train_data, batch_size, block_size, mask)
             # xs, ys = my_xs, my_ys
             # t = @async get_batch(train_data, batch_size, block_size)
             
             # @benchmark begin
             # @time train_step!(model, xs, ys, opt_state)
             model, opt_state, l = train_step!(model, xs, ys, opt_state)
+            # Flux.update!(opt_state, model, Flux.gradient(m -> loss(m, xs, ys), model)[1])
             # end
             next!(progress)
                 # println("loss: ", l)
@@ -193,7 +218,7 @@ end
 
     println("Preparing model")
     model = Model.Decoder(vocab_size=length(chars), n_layers=n_layers, n_embed=n_embed, n_head=n_head,
-                          block_size=block_size, attention_dropout=0.2, residual_dropout=0.2, decoder_mask=true)
+                          block_size=block_size, attention_dropout=0.2, residual_dropout=0.2)
     # model = Flux.paramtype(BFloat16, model) |> device
     model = model |> device
     println("Setting up optimizer")
